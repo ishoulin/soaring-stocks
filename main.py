@@ -151,10 +151,10 @@ def fetch_tw_stock_tickers():
 # 2. Email 自動發送函式
 # ====================================================
 def send_email_report(report_text):
-  sender = os.getenv("EMAIL_USER")
-  password = os.getenv("EMAIL_PASS")
-  receiver = os.getenv("EMAIL_RECEIVER", sender)
-
+  sender = os.getenv("EMAIL_USER", "").strip()
+  password = os.getenv("EMAIL_PASS", "").strip()
+  receiver = os.getenv("EMAIL_RECEIVER", "").strip() or sender
+  
   if not sender or not password:
     print("⚠️ 未設定 Email 環境變數，跳過發信步驟。")
     print(report_text)
