@@ -183,7 +183,10 @@ if __name__ == "__main__":
   all_stock_data = {}
   batch_size = 50
 
-  for i in range(0, len(symbol_list), batch_size):
+  total_fetched_count = len(symbol_list)  # 抓到的台股總檔數
+  print(f"🔍 成功抓取全台股清單：共 {total_fetched_count} 檔標的")
+
+  for i in range(0, total_fetched_count, batch_size):
     chunk = symbol_list[i : i + batch_size]
     try:
       data = yf.download(
@@ -198,6 +201,7 @@ if __name__ == "__main__":
           )
           df = df.dropna(subset=["Close"])
           if not df.empty and len(df) >= 30:
+            # 流動性過濾：近 5 日均量 > 500 張 (500,000 股)
             if df["Volume"].tail(5).mean() > 500000:
               df["Inst_Net_Buy"] = df["Volume"] * 0.2
               all_stock_data[symbol.split(".")[0]] = df
@@ -206,11 +210,25 @@ if __name__ == "__main__":
     except Exception:
       pass
 
+  valid_scanned_count = len(all_stock_data)  # 通過流動性過濾的標的數
+  print(
+      f"✅ 完成數據清洗：共 {valid_scanned_count} 檔標的符合分析條件（均量 >"
+      " 500張）"
+  )
+
   engine = ZenMomentumEngine()
   slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
 
-  # 組裝 Email 純文字內文
-  report = "📊 【ZenMomentum 盤後蓄能 Top 5】\n" + "=" * 35 + "\n"
+  # 組裝 Email 戰報內文（加上資料筆數統計）
+  report = (
+      f"📈 【ZenMomentum 盤後數據掃描】\n"
+      f"• 全台股掃描總數：{total_fetched_count} 檔\n"
+      f"• 符合流動性標的：{valid_scanned_count} 檔（近5日均量>500張）\n"
+      f"{'='*35}\n\n"
+      f"📊 【盤後蓄能 Top 5】\n"
+      f"{'='*35}\n"
+  )
+
   for rank, cand in enumerate(top_5, 1):
     s = cand["symbol"]
     name = tw_stocks.get(f"{s}.TW", tw_stocks.get(f"{s}.TWO", ""))
