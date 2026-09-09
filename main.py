@@ -220,49 +220,53 @@ if __name__ == '__main__':
       f'🎉 篩選完成：最終共 {valid_scanned_count} 檔標的符合「高檔強勢築底」型態！'
   )
 
-  # --- 執行引擎計算與產生戰報 ---
-  engine = ZenMomentumEngine()
-  slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
+# --- 執行引擎計算與產生戰報 ---
+    engine = ZenMomentumEngine()
+    slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
 
-  report = (
-      f'📈 【ZenMomentum 盤後數據掃描】\n'
-      f'• 全台股掃描總數：{total_fetched_count} 檔\n'
-      f'• 強勢築底合格標的：{valid_scanned_count} 檔（回落<20% + 均量>500張）\n'
-      f"{'='*35}\n\n"
-      f'📊 【盤後強勢 Top 5】\n'
-      f"{'='*35}\n"
-  )
-
-  for rank, cand in enumerate(top_5, 1):
-    s = cand['symbol']
-    name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
-    tag = ' 🔥 [突破5年新高]' if is_5y_high_map.get(s, False) else ''
-    report += (
-        f'第 {rank} 名 | {s} {name} | 能量: {cand["score"]}% | 收盤:'
-        f' ${cand["close"]}{tag}\n'
+    report = (
+        f'📈 【ZenMomentum 盤後數據掃描】\n'
+        f'• 全台股掃描總數：{total_fetched_count} 檔\n'
+        f'• 強勢築底合格標的：{valid_scanned_count} 檔（回落<20% + 均量>500張）\n'
+        f"{'='*35}\n\n"
+        f'📊 【盤後強勢 Top 5】\n'
+        f"{'='*35}\n"
     )
 
-  report += '\n🏆 【每日雙槽戰報】\n' + '=' * 35 + '\n'
-  if slot_a:
-    s = slot_a['symbol']
-    name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
-    tag = ' 🔥 [突破5年新高]' if is_5y_high_map.get(s, False) else ''
-    report += (
-        f'👑 [Slot A 衛冕者] {s} {name}{tag}\n   連霸: {slot_a["streak"]} 天 |'
-        f' 防守點: ${slot_a["stop_loss"]:.2f}\n'
-    )
-  else:
-    report += '👑 [Slot A 衛冕者] 目前空缺\n'
+    for rank, cand in enumerate(top_5, 1):
+      s = cand['symbol']
+      name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
+      # 改為明確顯示 Yes 或 No
+      is_high = is_5y_high_map.get(s, False)
+      tag = ' | 突破5年新高: Yes' if is_high else ' | 突破5年新高: No'
+      report += (
+          f'第 {rank} 名 | {s} {name} | 能量: {cand["score"]}% | 收盤:'
+          f' ${cand["close"]}{tag}\n'
+      )
 
-  if slot_b:
-    s = slot_b['symbol']
-    name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
-    tag = ' 🔥 [突破5年新高]' if is_5y_high_map.get(s, False) else ''
-    report += (
-        f'⚡ [Slot B 挑戰者] {s} {name}{tag}\n   能量: {slot_b["score"]}% |'
-        f' 建議防守: ${slot_b["stop_loss"]:.2f}\n'
-    )
-  else:
-    report += '⚡ [Slot B 挑戰者] 無標的跨越 90 分發動線\n'
+    report += '\n🏆 【每日雙槽戰報】\n' + '=' * 35 + '\n'
+    if slot_a:
+      s = slot_a['symbol']
+      name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
+      is_high = is_5y_high_map.get(s, False)
+      tag = ' | 突破5年新高: Yes' if is_high else ' | 突破5年新高: No'
+      report += (
+          f'👑 [Slot A 衛冕者] {s} {name}{tag}\n   連霸: {slot_a["streak"]} 天 |'
+          f' 防守點: ${slot_a["stop_loss"]:.2f}\n'
+      )
+    else:
+      report += '👑 [Slot A 衛冕者] 目前空缺\n'
 
-  send_email_report(report)
+    if slot_b:
+      s = slot_b['symbol']
+      name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
+      is_high = is_5y_high_map.get(s, False)
+      tag = ' | 突破5年新高: Yes' if is_high else ' | 突破5年新高: No'
+      report += (
+          f'⚡ [Slot B 挑戰者] {s} {name}{tag}\n   能量: {slot_b["score"]}% |'
+          f' 建議防守: ${slot_b["stop_loss"]:.2f}\n'
+      )
+    else:
+      report += '⚡ [Slot B 挑戰者] 無標的跨越 90 分發動線\n'
+
+    send_email_report(report)
