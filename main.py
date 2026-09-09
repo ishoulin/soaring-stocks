@@ -221,10 +221,10 @@ if __name__ == '__main__':
   )
 
 # --- 執行引擎計算與產生戰報 ---
-    engine = ZenMomentumEngine()
-    slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
+  engine = ZenMomentumEngine()
+  slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
 
-    report = (
+  report = (
         f'📈 【ZenMomentum 盤後數據掃描】\n'
         f'• 全台股掃描總數：{total_fetched_count} 檔\n'
         f'• 強勢築底合格標的：{valid_scanned_count} 檔（回落<20% + 均量>500張）\n'
@@ -233,7 +233,7 @@ if __name__ == '__main__':
         f"{'='*35}\n"
     )
 
-    for rank, cand in enumerate(top_5, 1):
+  for rank, cand in enumerate(top_5, 1):
       s = cand['symbol']
       name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
       # 改為明確顯示 Yes 或 No
@@ -244,8 +244,8 @@ if __name__ == '__main__':
           f' ${cand["close"]}{tag}\n'
       )
 
-    report += '\n🏆 【每日雙槽戰報】\n' + '=' * 35 + '\n'
-    if slot_a:
+  report += '\n🏆 【每日雙槽戰報】\n' + '=' * 35 + '\n'
+  if slot_a:
       s = slot_a['symbol']
       name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
       is_high = is_5y_high_map.get(s, False)
@@ -254,10 +254,10 @@ if __name__ == '__main__':
           f'👑 [Slot A 衛冕者] {s} {name}{tag}\n   連霸: {slot_a["streak"]} 天 |'
           f' 防守點: ${slot_a["stop_loss"]:.2f}\n'
       )
-    else:
+  else:
       report += '👑 [Slot A 衛冕者] 目前空缺\n'
 
-    if slot_b:
+  if slot_b:
       s = slot_b['symbol']
       name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
       is_high = is_5y_high_map.get(s, False)
@@ -266,7 +266,7 @@ if __name__ == '__main__':
           f'⚡ [Slot B 挑戰者] {s} {name}{tag}\n   能量: {slot_b["score"]}% |'
           f' 建議防守: ${slot_b["stop_loss"]:.2f}\n'
       )
-    else:
+  else:
       report += '⚡ [Slot B 挑戰者] 無標的跨越 90 分發動線\n'
 
     send_email_report(report)
