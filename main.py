@@ -221,10 +221,10 @@ if __name__ == '__main__':
   )
 
 # --- 執行引擎計算與產生戰報 ---
-    engine = ZenMomentumEngine()
-    slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
+engine = ZenMomentumEngine()
+slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
 
-    report = (
+report = (
         f'📈 【ZenMomentum 盤後數據掃描】\n'
         f'• 全台股掃描總數：{total_fetched_count} 檔\n'
         f'• 強勢築底合格標的：{valid_scanned_count} 檔（回落<20% + 均量>500張）\n'
@@ -232,8 +232,7 @@ if __name__ == '__main__':
         f'📊 【盤後強勢 Top 5】\n'
         f"{'='*35}\n"
     )
-
-    for rank, cand in enumerate(top_5, 1):
+for rank, cand in enumerate(top_5, 1):
       s = cand['symbol']
       name = tw_stocks.get(f'{s}.TW', tw_stocks.get(f'{s}.TWO', ''))
       is_high = is_5y_high_map.get(s, False)
