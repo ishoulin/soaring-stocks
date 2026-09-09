@@ -175,7 +175,7 @@ def send_email_report(report_text):
 
 
 # ====================================================
-# 3. 主程式執行
+# 3. 主程式執行（已加入：剔除 2 年高點回落 > 20% 標的）
 # ====================================================
 if __name__ == "__main__":
   tw_stocks = fetch_tw_stock_tickers()
@@ -183,14 +183,15 @@ if __name__ == "__main__":
   all_stock_data = {}
   batch_size = 50
 
-  total_fetched_count = len(symbol_list)  # 抓到的台股總檔數
+  total_fetched_count = len(symbol_list)
   print(f"🔍 成功抓取全台股清單：共 {total_fetched_count} 檔標的")
 
   for i in range(0, total_fetched_count, batch_size):
     chunk = symbol_list[i : i + batch_size]
     try:
+      # 1. 時間範圍由 6mo 改為 2y，確保抓得到 2 年內的最高價
       data = yf.download(
-          chunk, period="6mo", group_by="ticker", threads=False, progress=False
+          chunk, period="2y", group_by="ticker", threads=False, progress=False
       )
       for symbol in chunk:
         try:
@@ -200,22 +201,34 @@ if __name__ == "__main__":
               else data.copy()
           )
           df = df.dropna(subset=["Close"])
-          if not df.empty and len(df) >= 30:
-            # 流動性過濾：近 5 日均量 > 500 張 (500,000 股)
+
+          # 需有至少半年的 K 線資料，且近 5 日均量 > 500 張
+          if not df.empty and len(df) >= 120:
             if df["Volume"].tail(5).mean() > 500000:
-              df["Inst_Net_Buy"] = df["Volume"] * 0.2
-              all_stock_data[symbol.split(".")[0]] = df
+
+              # 2. 計算 2 年高點回落幅度
+              high_2y = df["High"].max()  # 過去 2 年最高價
+              current_close = df["Close"].iloc[-1]  # 當前收盤價
+              drawdown_2y = (high_2y - current_close) / high_2y  # 回落比例
+
+              # 核心過濾：只保留回落 <= 20% (相當於股價維持在 2 年最高點的 80% 以上)
+              if drawdown_2y <= 0.20:
+                df["Inst_Net_Buy"] = df["Volume"] * 0.2
+                all_stock_data[symbol.split(".")[0]] = df
+
         except Exception:
           continue
     except Exception:
       pass
 
-  valid_scanned_count = len(all_stock_data)  # 通過流動性過濾的標的數
+  valid_scanned_count = len(all_stock_data)
   print(
-      f"✅ 完成數據清洗：共 {valid_scanned_count} 檔標的符合分析條件（均量 >"
-      " 500張）"
+      f"✅ 完成數據清洗：共 {valid_scanned_count} 檔標的符合條件（均量 >"
+      " 500張 且 距離2年高點回落 < 20%）"
   )
 
+  # 後續的 engine 運算與戰報發送維持不變...
+  
   engine = ZenMomentumEngine()
   slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
 
