@@ -24,23 +24,28 @@ jobs:
         python -m pip install --upgrade pip
         pip install pandas requests yfinance lxml html5lib
 
+    # 修復 1：統一狀態檔名為 zen_state.json，並優化快取 Key 邏輯
     - name: Restore arena state
       uses: actions/cache@v3
       with:
-        path: arena_state.json
-        key: arena-state-${{ github.run_id }}
+        path: zen_state.json
+        key: zen-state-v1-${{ github.sha }}
         restore-keys: |
-          arena-state-
+          zen-state-v1-
 
+    # 修復 2：加上 timeout-minutes: 10，避免 yfinance 連線死鎖無限轉圈
     - name: Run ZenMomentum Scanner
+      timeout-minutes: 10
       env:
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
       run: python main.py
 
+    # 修復 3：統一保存 zen_state.json 快取
     - name: Save arena state
+      if: always() # 確保就算程式結束也能更新快取
       uses: actions/cache@v3
       with:
-        path: arena_state.json
-        key: arena-state-${{ github.run_id }}
+        path: zen_state.json
+        key: zen-state-v1-${{ github.sha }}
