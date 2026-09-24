@@ -229,7 +229,7 @@ if __name__ == "__main__":
         f"🔍 成功抓取全台股「純個股」清單：共 {total_fetched_count} 檔標的 (已排除 ETF/權證)"
     )
 
-    batch_size = 50
+    batch_size = 20
     stage1_passed_symbols = []
 
     # --- 第一階段：快速篩選成交量 (均量 >= 500 張 = 500,000 股) ---
@@ -242,7 +242,7 @@ if __name__ == "__main__":
                 chunk,
                 period="6mo",
                 group_by="ticker",
-                threads=True,
+                threads=False,
                 progress=False,
                 timeout=10,
             )
