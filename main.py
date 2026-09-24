@@ -1,5 +1,7 @@
 import datetime
+import json
 import os
+import re
 import smtplib
 from email.header import Header
 from email.mime.text import MIMEText
@@ -8,34 +10,78 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+STATE_FILE = "zen_state.json"
+
 
 # ====================================================
-# 1. 核心評分引擎 (ZenMomentum Engine)
+# 1. 核心評分引擎 (ZenMomentum Engine - 正宗築底版)
 # ====================================================
 class ZenMomentumEngine:
 
     def calculate_score(self, df):
-        """計算強勢打底與能量評分"""
-        close = df["Close"]
+        """正宗『強勢築底』評分引擎
+
+        指標三維度：
+        1. 築底位置 (40分): 剛拉開近20日低點 2%~8% 為黃金區；太高(追高)或太低(破底)扣分
+        2. 籌碼壓縮 (35分): 近 10 日高低振幅越小，代表籌碼沉澱越完美
+        3. 溫和點火 (25分): 5日均量略大於 20日均量 (1.1 ~ 1.5 倍最佳)，非無量亦非暴量
+        """
+        close = df["Close"].iloc[-1]
         volume = df["Volume"]
 
-        # 1. 動能分數 (近 20 日相對高檔)
         low_20 = df["Low"].tail(20).min()
-        high_20 = df["High"].tail(20).max()
-        pos_score = ((close.iloc[-1] - low_20) / (high_20 - low_20 + 1e-6)) * 40  # 占 40 分
 
-        # 2. 量能集中度 (近 5 日均量 vs 近 60 日均量)
+        # 1. 築底位置分 (40分)
+        dist_from_low = (close - low_20) / (low_20 + 1e-6)
+        if 0.02 <= dist_from_low <= 0.08:
+            base_score = 40.0  # 剛完成打腳，最佳黃金築底區
+        elif dist_from_low < 0.02:
+            base_score = 25.0  # 太貼近低點，仍有再次破底風險
+        else:
+            # 超過 8% 代表已經拉開，離底部越來越遠，分數隨之遞減
+            base_score = max(0.0, 40.0 - (dist_from_low - 0.08) * 150)
+
+        # 2. 籌碼壓縮分 (35分)：近 10 日振幅越小越好
+        high_10 = df["High"].tail(10).max()
+        low_10 = df["Low"].tail(10).min()
+        range_10 = (high_10 - low_10) / (low_10 + 1e-6)
+        # 10日振幅在 8% 以內給滿分，超過 20% 歸零
+        squeeze_score = max(0.0, (1.0 - range_10 / 0.20)) * 35.0
+
+        # 3. 溫和點火分 (25分)：5日均量 vs 20日均量
         v_5 = volume.tail(5).mean()
-        v_60 = volume.tail(60).mean()
-        vol_ratio = min(v_5 / (v_60 + 1e-6), 2.0)
-        vol_score = (vol_ratio / 2.0) * 30  # 占 30 分
+        v_20 = volume.tail(20).mean()
+        v_ratio = v_5 / (v_20 + 1e-6)
 
-        # 3. 價格穩定度 (近 20 日波動振幅，越低越好)
-        range_20 = (high_20 - low_20) / (low_20 + 1e-6)
-        stability_score = max(0, (1 - range_20 / 0.20)) * 30  # 占 30 分
+        if 1.1 <= v_ratio <= 1.5:
+            vol_score = 25.0  # 溫和增量，主力默默卡位
+        elif v_ratio < 1.1:
+            vol_score = (v_ratio / 1.1) * 18.0  # 量能太過沉悶
+        else:
+            vol_score = 20.0  # 暴量過頭，築底期容易伴隨隔日沖賣壓
 
-        total_score = round(pos_score + vol_score + stability_score, 1)
+        total_score = round(base_score + squeeze_score + vol_score, 1)
         return min(total_score, 99.9)
+
+    def load_state(self):
+        """讀取歷史 Slot A 狀態以計算連霸天數"""
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"last_slot_a_symbol": None, "streak": 0}
+
+    def save_state(self, slot_a_symbol, streak):
+        """儲存今日 Slot A 狀態"""
+        try:
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"last_slot_a_symbol": slot_a_symbol, "streak": streak}, f
+                )
+        except Exception as e:
+            print(f"⚠️ 無法寫入狀態檔: {e}")
 
     def run_daily_arena(self, stock_dict):
         candidates = []
@@ -59,17 +105,30 @@ class ZenMomentumEngine:
         candidates.sort(key=lambda x: x["score"], reverse=True)
         top_5 = candidates[:5]
 
+        # 處理 Slot A 與連霸計算
+        history = self.load_state()
         slot_a = top_5[0] if len(top_5) > 0 else None
-        if slot_a:
-            slot_a["streak"] = 1
 
-        slot_b = top_5[1] if len(top_5) > 1 and top_5[1]["score"] >= 90.0 else None
+        if slot_a:
+            if history.get("last_slot_a_symbol") == slot_a["symbol"]:
+                slot_a["streak"] = history.get("streak", 0) + 1
+            else:
+                slot_a["streak"] = 1
+            # 儲存最新的 Slot A 狀態
+            self.save_state(slot_a["symbol"], slot_a["streak"])
+
+        # Slot B 挑戰者門檻設為 80.0 分
+        slot_b = (
+            top_5[1]
+            if len(top_5) > 1 and top_5[1]["score"] >= 80.0
+            else None
+        )
 
         return slot_a, slot_b, top_5
 
 
 # ====================================================
-# 2. 抓取全台股清單 (加入 timeout 防卡死)
+# 2. 抓取全台股清單 (嚴格排除 ETF / 權證 / TDR / REITs)
 # ====================================================
 def fetch_tw_stock_tickers():
     stocks = {}
@@ -79,6 +138,24 @@ def fetch_tw_stock_tickers():
     urls = [
         ("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", ".TW"),  # 上市
         ("https://isin.twse.com.tw/isin/C_public.jsp?strMode=4", ".TWO"),  # 上櫃
+    ]
+
+    # 非普通股關鍵字過濾網
+    exclude_keywords = [
+        "ETF",
+        "ETN",
+        "認購",
+        "認售",
+        "牛證",
+        "熊證",
+        "展",
+        "R1",
+        "R2",
+        "存託憑證",
+        "特",
+        "甲",
+        "乙",
+        "丙",
     ]
 
     for url, suffix in urls:
@@ -92,8 +169,19 @@ def fetch_tw_stock_tickers():
                 df = df.iloc[1:]
                 for entry in df["有價證券代號及名稱"].dropna():
                     parts = entry.split("\u3000")
-                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
-                        stocks[f"{parts[0]}{suffix}"] = parts[1]
+                    if len(parts) == 2:
+                        code, name = parts[0].strip(), parts[1].strip()
+
+                        # 1. 代碼規則過濾：僅保留「4 位數純數字」普通股代碼
+                        # 排除 00 (ETF/ETN)、01 (TDR/REITs)、6位數 (權證)
+                        if not (len(code) == 4 and code.isdigit()):
+                            continue
+
+                        # 2. 名稱關鍵字過濾
+                        if any(kw in name for kw in exclude_keywords):
+                            continue
+
+                        stocks[f"{code}{suffix}"] = name
         except Exception as e:
             print(f"⚠️ 抓取 {suffix} 清單失敗: {e}")
 
@@ -114,7 +202,9 @@ def send_email_report(report_text):
         return
 
     msg = MIMEText(report_text, "plain", "utf-8")
-    msg["Subject"] = Header("⚡ ZenMomentum 每日台股強勢築底戰報", "utf-8")
+    msg["Subject"] = Header(
+        "⚡ ZenMomentum 每日台股強勢築底戰報", "utf-8"
+    )
     msg["From"] = sender
     msg["To"] = receiver
 
@@ -128,24 +218,30 @@ def send_email_report(report_text):
 
 
 # ====================================================
-# 4. 主程式執行 (包含流動性過濾 + 突破 5 年新高檢測)
+# 4. 主程式執行
 # ====================================================
 if __name__ == "__main__":
     tw_stocks = fetch_tw_stock_tickers()
     symbol_list = list(tw_stocks.keys())
     total_fetched_count = len(symbol_list)
-    print(f"🔍 成功抓取全台股清單：共 {total_fetched_count} 檔標的")
+    print(
+        f"🔍 成功抓取全台股「純個股」清單：共 {total_fetched_count} 檔標的 (已排除 ETF/權證)"
+    )
 
     batch_size = 50
     stage1_passed_symbols = []
 
-    # --- 第一階段：快速篩選成交量 (6 個月數據) ---
-    print("🚀 [第一階段] 快速掃描流動性（均量 > 500張）...")
+    # --- 第一階段：快速篩選成交量 (均量 >= 500 張 = 500,000 股) ---
+    print("🚀 [第一階段] 快速掃描流動性（5日均量 >= 500張）...")
     for i in range(0, total_fetched_count, batch_size):
         chunk = symbol_list[i : i + batch_size]
         try:
             data = yf.download(
-                chunk, period="6mo", group_by="ticker", threads=False, progress=False
+                chunk,
+                period="6mo",
+                group_by="ticker",
+                threads=False,
+                progress=False,
             )
             for symbol in chunk:
                 try:
@@ -156,25 +252,33 @@ if __name__ == "__main__":
                     )
                     df = df.dropna(subset=["Close"])
                     if not df.empty and len(df) >= 30:
-                        if df["Volume"].tail(5).mean() > 500000:
+                        if df["Volume"].tail(5).mean() >= 500000:
                             stage1_passed_symbols.append(symbol)
                 except Exception:
                     continue
         except Exception:
             pass
 
-    print(f"✅ 第一階段完成：共 {len(stage1_passed_symbols)} 檔標的符合流動性條件")
+    print(
+        f"✅ 第一階段完成：共 {len(stage1_passed_symbols)} 檔個股符合流動性條件"
+    )
 
-    # --- 第二階段：精準下載 5 年數據 + 檢測「2年高點回落 <= 20%」與「突破5年新高」 ---
-    print("🎯 [第二階段] 精準檢測「2年高點回落 <= 20%」與「突破 5 年新高」標記...")
+    # --- 第二階段：精準下載數據 + 檢測「2年高點回落 <= 20%」與「突破5年新高」 ---
+    print(
+        "🎯 [第二階段] 精準檢測「2年高點回落 <= 20%」與「突破 5 年新高」標記..."
+    )
     all_stock_data = {}
-    is_5y_high_map = {}  # 紀錄是否突破 5 年新高
+    is_5y_high_map = {}
 
     for i in range(0, len(stage1_passed_symbols), batch_size):
         chunk = stage1_passed_symbols[i : i + batch_size]
         try:
             data_5y = yf.download(
-                chunk, period="5y", group_by="ticker", threads=False, progress=False
+                chunk,
+                period="5y",
+                group_by="ticker",
+                threads=False,
+                progress=False,
             )
             for symbol in chunk:
                 try:
@@ -186,17 +290,13 @@ if __name__ == "__main__":
                     df = df.dropna(subset=["Close"])
 
                     if not df.empty and len(df) >= 120:
-                        # 取近 2 年 (約 500 個交易日) 最高價計算回落
                         high_2y = df["High"].tail(500).max()
                         current_close = df["Close"].iloc[-1]
                         drawdown_2y = (high_2y - current_close) / high_2y
 
-                        # 核心條件：2 年高點回落 <= 20%
+                        # 核心條件：近 2 年高點回落 <= 20%
                         if drawdown_2y <= 0.20:
-                            # 計算 5 年最高價 (不含今日，避免自己跟自己比)
                             high_5y_prev = df["High"].iloc[:-1].max()
-
-                            # 判斷今日收盤價是否「突破 5 年最高價」
                             is_breakout = current_close >= high_5y_prev
 
                             clean_symbol = symbol.split(".")[0]
@@ -208,7 +308,9 @@ if __name__ == "__main__":
             pass
 
     valid_scanned_count = len(all_stock_data)
-    print(f"🎉 篩選完成：最終共 {valid_scanned_count} 檔標的符合「高檔強勢築底」型態！")
+    print(
+        f"🎉 篩選完成：最終共 {valid_scanned_count} 檔個股符合「高檔強勢築底」型態！"
+    )
 
     # --- 執行引擎計算與產生戰報 ---
     engine = ZenMomentumEngine()
@@ -216,7 +318,7 @@ if __name__ == "__main__":
 
     report = (
         f"📈 【ZenMomentum 盤後數據掃描】\n"
-        f"• 全台股掃描總數：{total_fetched_count} 檔\n"
+        f"• 全台股個股掃描總數：{total_fetched_count} 檔 (已排除 ETF/權證)\n"
         f"• 強勢築底合格標的：{valid_scanned_count} 檔（回落<20% + 均量>500張）\n"
         f"{'='*35}\n\n"
         f"📊 【盤後強勢 Top 5】\n"
@@ -228,9 +330,7 @@ if __name__ == "__main__":
         name = tw_stocks.get(f"{s}.TW", tw_stocks.get(f"{s}.TWO", ""))
         is_high = is_5y_high_map.get(s, False)
         tag = " | 突破5年新高: Yes" if is_high else " | 突破5年新高: No"
-        report += (
-            f"第 {rank} 名 | {s} {name} | 能量: {cand['score']}% | 收盤: ${cand['close']}{tag}\n"
-        )
+        report += f"第 {rank} 名 | {s} {name} | 能量: {cand['score']}% | 收盤: ${cand['close']}{tag}\n"
 
     report += "\n🏆 【每日雙槽戰報】\n" + "=" * 35 + "\n"
     if slot_a:
@@ -240,7 +340,7 @@ if __name__ == "__main__":
         tag = " | 突破5年新高: Yes" if is_high else " | 突破5年新高: No"
         report += (
             f"👑 [Slot A 衛冕者] {s} {name}{tag}\n"
-            f"   連霸: {slot_a['streak']} 天 | 防守點: ${slot_a['stop_loss']:.2f}\n"
+            f"    連霸: {slot_a['streak']} 天 | 防守點: ${slot_a['stop_loss']:.2f}\n"
         )
     else:
         report += "👑 [Slot A 衛冕者] 目前空缺\n"
@@ -252,9 +352,9 @@ if __name__ == "__main__":
         tag = " | 突破5年新高: Yes" if is_high else " | 突破5年新高: No"
         report += (
             f"⚡ [Slot B 挑戰者] {s} {name}{tag}\n"
-            f"   能量: {slot_b['score']}% | 建議防守: ${slot_b['stop_loss']:.2f}\n"
+            f"    能量: {slot_b['score']}% | 建議防守: ${slot_b['stop_loss']:.2f}\n"
         )
     else:
-        report += "⚡ [Slot B 挑戰者] 無標的跨越 90 分發動線\n"
+        report += "⚡ [Slot B 挑戰者] 無標的跨越 80 分發動線\n"
 
     send_email_report(report)
