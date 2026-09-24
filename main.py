@@ -3,6 +3,7 @@ import json
 import os
 import re
 import smtplib
+import sys
 from email.header import Header
 from email.mime.text import MIMEText
 import numpy as np
@@ -38,14 +39,12 @@ class ZenMomentumEngine:
         elif dist_from_low < 0.02:
             base_score = 25.0  # 太貼近低點，仍有再次破底風險
         else:
-            # 超過 8% 代表已經拉開，離底部越來越遠，分數隨之遞減
             base_score = max(0.0, 40.0 - (dist_from_low - 0.08) * 150)
 
         # 2. 籌碼壓縮分 (35分)：近 10 日振幅越小越好
         high_10 = df["High"].tail(10).max()
         low_10 = df["Low"].tail(10).min()
         range_10 = (high_10 - low_10) / (low_10 + 1e-6)
-        # 10日振幅在 8% 以內給滿分，超過 20% 歸零
         squeeze_score = max(0.0, (1.0 - range_10 / 0.20)) * 35.0
 
         # 3. 溫和點火分 (25分)：5日均量 vs 20日均量
@@ -58,7 +57,7 @@ class ZenMomentumEngine:
         elif v_ratio < 1.1:
             vol_score = (v_ratio / 1.1) * 18.0  # 量能太過沉悶
         else:
-            vol_score = 20.0  # 暴量過頭，築底期容易伴隨隔日沖賣壓
+            vol_score = 20.0  # 暴量過頭
 
         total_score = round(base_score + squeeze_score + vol_score, 1)
         return min(total_score, 99.9)
@@ -81,7 +80,7 @@ class ZenMomentumEngine:
                     {"last_slot_a_symbol": slot_a_symbol, "streak": streak}, f
                 )
         except Exception as e:
-            print(f"⚠️ 無法寫入狀態檔: {e}")
+            print(f"⚠️ 無法寫入狀態檔: {e}", flush=True)
 
     def run_daily_arena(self, stock_dict):
         candidates = []
@@ -89,7 +88,6 @@ class ZenMomentumEngine:
             try:
                 score = self.calculate_score(df)
                 close = round(float(df["Close"].iloc[-1]), 2)
-                # 以近 20 日最低價做為基礎防守點
                 stop_loss = round(float(df["Low"].tail(20).min() * 0.98), 2)
 
                 candidates.append({
@@ -101,11 +99,9 @@ class ZenMomentumEngine:
             except Exception:
                 continue
 
-        # 依能量分數排序
         candidates.sort(key=lambda x: x["score"], reverse=True)
         top_5 = candidates[:5]
 
-        # 處理 Slot A 與連霸計算
         history = self.load_state()
         slot_a = top_5[0] if len(top_5) > 0 else None
 
@@ -114,10 +110,8 @@ class ZenMomentumEngine:
                 slot_a["streak"] = history.get("streak", 0) + 1
             else:
                 slot_a["streak"] = 1
-            # 儲存最新的 Slot A 狀態
             self.save_state(slot_a["symbol"], slot_a["streak"])
 
-        # Slot B 挑戰者門檻設為 80.0 分
         slot_b = (
             top_5[1]
             if len(top_5) > 1 and top_5[1]["score"] >= 80.0
@@ -131,16 +125,16 @@ class ZenMomentumEngine:
 # 2. 抓取全台股清單 (嚴格排除 ETF / 權證 / TDR / REITs)
 # ====================================================
 def fetch_tw_stock_tickers():
+    print("📡 正在從證交所抓取台股清單...", flush=True)
     stocks = {}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     urls = [
         ("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", ".TW"),  # 上市
         ("https://isin.twse.com.tw/isin/C_public.jsp?strMode=4", ".TWO"),  # 上櫃
     ]
 
-    # 非普通股關鍵字過濾網
     exclude_keywords = [
         "ETF",
         "ETN",
@@ -160,8 +154,7 @@ def fetch_tw_stock_tickers():
 
     for url, suffix in urls:
         try:
-            # 加上 timeout=(5, 10) 防止爬蟲卡住
-            res = requests.get(url, headers=headers, timeout=(5, 10))
+            res = requests.get(url, headers=headers, timeout=8)
             res.encoding = "big5"
             df_list = pd.read_html(res.text)
             if df_list:
@@ -173,19 +166,17 @@ def fetch_tw_stock_tickers():
                     if len(parts) == 2:
                         code, name = parts[0].strip(), parts[1].strip()
 
-                        # 1. 代碼規則過濾：僅保留「4 位數純數字」普通股代碼
-                        # 排除 00 (ETF/ETN)、01 (TDR/REITs)、6位數 (權證)
                         if not (len(code) == 4 and code.isdigit()):
                             continue
 
-                        # 2. 名稱關鍵字過濾
                         if any(kw in name for kw in exclude_keywords):
                             continue
 
                         stocks[f"{code}{suffix}"] = name
         except Exception as e:
-            print(f"⚠️ 抓取 {suffix} 清單失敗: {e}")
+            print(f"⚠️ 抓取 {suffix} 清單失敗: {e}", flush=True)
 
+    print(f"✅ 成功獲取 {len(stocks)} 檔個股清單！", flush=True)
     return stocks
 
 
@@ -198,8 +189,11 @@ def send_email_report(report_text):
     receiver = os.getenv("EMAIL_RECEIVER", "").strip() or sender
 
     if not sender or not password:
-        print("⚠️ 未設定 Email 環境變數，跳過發信步驟。")
-        print(report_text)
+        print(
+            "⚠️ 未設定 Email 環境變數，跳過發信步驟，直接印出戰報：",
+            flush=True,
+        )
+        print(report_text, flush=True)
         return
 
     msg = MIMEText(report_text, "plain", "utf-8")
@@ -213,39 +207,47 @@ def send_email_report(report_text):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(sender, password)
             server.sendmail(sender, [receiver], msg.as_string())
-        print("📧 Email 戰報已成功發送！")
+        print("📧 Email 戰報已成功發送！", flush=True)
     except Exception as e:
-        print(f"❌ 發信失敗: {e}")
+        print(f"❌ 發信失敗: {e}", flush=True)
 
 
 # ====================================================
-# 4. 主程式執行
+# 4. 主程式執行 (強效防卡死 Safe-Download)
 # ====================================================
 if __name__ == "__main__":
     tw_stocks = fetch_tw_stock_tickers()
     symbol_list = list(tw_stocks.keys())
     total_fetched_count = len(symbol_list)
-    print(
-        f"🔍 成功抓取全台股「純個股」清單：共 {total_fetched_count} 檔標的 (已排除 ETF/權證)"
-    )
 
-    batch_size = 20
+    # 批次改小為 15，大幅降低被 Yahoo 封鎖或 Response 掛起的機率
+    batch_size = 15
     stage1_passed_symbols = []
 
-    # --- 第一階段：快速篩選成交量 (均量 >= 500 張 = 500,000 股) ---
-    print("🚀 [第一階段] 快速掃描流動性（5日均量 >= 500張）...")
+    print(
+        "🚀 [第一階段] 快速掃描流動性（5日均量 >= 500張）...", flush=True
+    )
     for i in range(0, total_fetched_count, batch_size):
         chunk = symbol_list[i : i + batch_size]
+        print(
+            f"  ⏳ 下載進度: {i}/{total_fetched_count}...",
+            end="\r",
+            flush=True,
+        )
+
         try:
-            # 加入 timeout=10，並將 threads 設為 True 加快連線
+            # 關鍵防卡死：timeout=8, threads=False
             data = yf.download(
                 chunk,
                 period="6mo",
                 group_by="ticker",
                 threads=False,
                 progress=False,
-                timeout=10,
+                timeout=8,
             )
+            if data is None or data.empty:
+                continue
+
             for symbol in chunk:
                 try:
                     df = (
@@ -260,15 +262,17 @@ if __name__ == "__main__":
                 except Exception:
                     continue
         except Exception:
-            pass
+            # 若該批次卡死或出錯，直接跳過該批次，絕不中斷整體執行
+            continue
 
     print(
-        f"✅ 第一階段完成：共 {len(stage1_passed_symbols)} 檔個股符合流動性條件"
+        f"\n✅ 第一階段完成：共 {len(stage1_passed_symbols)} 檔個股符合流動性條件",
+        flush=True,
     )
 
-    # --- 第二階段：精準下載數據 + 檢測「2年高點回落 <= 20%」與「突破5年新高」 ---
     print(
-        "🎯 [第二階段] 精準檢測「2年高點回落 <= 20%」與「突破 5 年新高」標記..."
+        "🎯 [第二階段] 精準檢測「2年高點回落 <= 20%」與「突破 5 年新高」...",
+        flush=True,
     )
     all_stock_data = {}
     is_5y_high_map = {}
@@ -276,15 +280,17 @@ if __name__ == "__main__":
     for i in range(0, len(stage1_passed_symbols), batch_size):
         chunk = stage1_passed_symbols[i : i + batch_size]
         try:
-            # 加入 timeout=10 防卡死
             data_5y = yf.download(
                 chunk,
                 period="5y",
                 group_by="ticker",
-                threads=True,
+                threads=False,
                 progress=False,
-                timeout=10,
+                timeout=8,
             )
+            if data_5y is None or data_5y.empty:
+                continue
+
             for symbol in chunk:
                 try:
                     df = (
@@ -299,7 +305,6 @@ if __name__ == "__main__":
                         current_close = df["Close"].iloc[-1]
                         drawdown_2y = (high_2y - current_close) / high_2y
 
-                        # 核心條件：近 2 年高點回落 <= 20%
                         if drawdown_2y <= 0.20:
                             high_5y_prev = df["High"].iloc[:-1].max()
                             is_breakout = current_close >= high_5y_prev
@@ -310,14 +315,15 @@ if __name__ == "__main__":
                 except Exception:
                     continue
         except Exception:
-            pass
+            continue
 
     valid_scanned_count = len(all_stock_data)
     print(
-        f"🎉 篩選完成：最終共 {valid_scanned_count} 檔個股符合「高檔強勢築底」型態！"
+        f"🎉 篩選完成：最終共 {valid_scanned_count} 檔個股符合「高檔強勢築底」型態！",
+        flush=True,
     )
 
-    # --- 執行引擎計算與產生戰報 ---
+    # --- 執行引擎與產生報告 ---
     engine = ZenMomentumEngine()
     slot_a, slot_b, top_5 = engine.run_daily_arena(all_stock_data)
 
