@@ -160,7 +160,8 @@ def fetch_tw_stock_tickers():
 
     for url, suffix in urls:
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            # 加上 timeout=(5, 10) 防止爬蟲卡住
+            res = requests.get(url, headers=headers, timeout=(5, 10))
             res.encoding = "big5"
             df_list = pd.read_html(res.text)
             if df_list:
@@ -236,12 +237,14 @@ if __name__ == "__main__":
     for i in range(0, total_fetched_count, batch_size):
         chunk = symbol_list[i : i + batch_size]
         try:
+            # 加入 timeout=10，並將 threads 設為 True 加快連線
             data = yf.download(
                 chunk,
                 period="6mo",
                 group_by="ticker",
-                threads=False,
+                threads=True,
                 progress=False,
+                timeout=10,
             )
             for symbol in chunk:
                 try:
@@ -273,12 +276,14 @@ if __name__ == "__main__":
     for i in range(0, len(stage1_passed_symbols), batch_size):
         chunk = stage1_passed_symbols[i : i + batch_size]
         try:
+            # 加入 timeout=10 防卡死
             data_5y = yf.download(
                 chunk,
                 period="5y",
                 group_by="ticker",
-                threads=False,
+                threads=True,
                 progress=False,
+                timeout=10,
             )
             for symbol in chunk:
                 try:
