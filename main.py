@@ -9,7 +9,51 @@ from email.mime.text import MIMEText
 import numpy as np
 import pandas as pd
 import requests
+import time
 import yfinance as yf
+
+def fetch_data_safely(tickers, period="5y", batch_size=10, sleep_sec=1.5):
+    """
+    分批下載歷史資料，加入 request 間隔防止被 Yahoo 丟包卡死
+    """
+    all_data = pd.DataFrame()
+    total_batches = (len(tickers) + batch_size - 1) // batch_size
+    
+    print(f"總共 {len(tickers)} 檔股票，分為 {total_batches} 批次進行下載...")
+
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i + batch_size]
+        current_batch = i // batch_size + 1
+        print(f"[{current_batch}/{total_batches}] 正在下載: {', '.join(batch)}...")
+        
+        success = False
+        for attempt in range(3):  # 最多嘗試 3 次
+            try:
+                # 關鍵設定：timeout=10, threads=False
+                df = yf.download(
+                    tickers=batch, 
+                    period=period, 
+                    group_by='ticker', 
+                    threads=False, 
+                    timeout=10,
+                    progress=False
+                )
+                if not df.empty:
+                    # 簡單合併處理
+                    all_data = pd.concat([all_data, df], axis=1)
+                    success = True
+                    break
+            except Exception as e:
+                print(f"   ⚠️ 批次下載失敗 (第 {attempt+1} 次重試): {e}")
+                time.sleep(2)
+        
+        if not success:
+            print(f"   ❌ 該批次多次失敗，已自動跳過，避免阻塞流程。")
+            
+        # 禮貌性停頓，避免被 Yahoo 認定為 Bot 攻擊
+        time.sleep(sleep_sec)
+
+    return all_data
 
 STATE_FILE = "zen_state.json"
 
