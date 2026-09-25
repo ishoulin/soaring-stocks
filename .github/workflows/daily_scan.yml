@@ -35,7 +35,7 @@ jobs:
 
     # 修復 2：加上 timeout-minutes: 10，避免 yfinance 連線死鎖無限轉圈
     - name: Run ZenMomentum Scanner
-      timeout-minutes: 10
+      timeout-minutes: 30
       env:
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
